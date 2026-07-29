@@ -38,6 +38,12 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "O Validade App precisa de acesso à sua câmera para escanear códigos de barras."
+        }
       ]
     ],
     "experiments": {
