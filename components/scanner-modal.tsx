@@ -2,15 +2,19 @@ import { CameraView, useCameraPermissions, type BarcodeScanningResult, type Barc
 import * as Haptics from 'expo-haptics';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Dimensions,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   Vibration,
   View,
 } from 'react-native';
@@ -28,6 +32,13 @@ export interface ScannedCode {
   type: string;
 }
 
+export interface ProductFormData {
+  barcode: string;
+  format: string;
+  name: string;
+  expirationDate: string; // YYYY-MM-DD
+}
+
 interface ScannerModalProps {
   /** Whether the modal is visible */
   visible: boolean;
@@ -35,6 +46,8 @@ interface ScannerModalProps {
   onClose: () => void;
   /** Called when a code is successfully scanned */
   onScan: (code: ScannedCode) => void;
+  /** Called when a product is registered after scanning */
+  onProductRegister: (data: ProductFormData) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +90,13 @@ const BARCODE_TYPES: BarcodeType[] = [
 
 const SCAN_DELAY_MS = 800; // Brief pause so user sees the green frame before modal closes
 
+const QUICK_DATES = [
+  { label: '1 mês', months: 1 },
+  { label: '3 meses', months: 3 },
+  { label: '6 meses', months: 6 },
+  { label: '1 ano', months: 12 },
+] as const;
+
 // ---------------------------------------------------------------------------
 // Animated scan line
 // ---------------------------------------------------------------------------
@@ -115,20 +135,37 @@ function ScanLine() {
 // ScannerModal
 // ---------------------------------------------------------------------------
 
-export function ScannerModal({ visible, onClose, onScan }: ScannerModalProps) {
+export function ScannerModal({ visible, onClose, onScan, onProductRegister }: ScannerModalProps) {
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<'front' | 'back'>('back');
   const [torch, setTorch] = useState(false);
   const [scanned, setScanned] = useState(false);
+  const [mode, setMode] = useState<'scanning' | 'form'>('scanning');
+  const [scannedCode, setScannedCode] = useState<ScannedCode | null>(null);
+  const [productName, setProductName] = useState('');
+  const [day, setDay] = useState('');
+  const [month, setMonth] = useState('');
+  const [year, setYear] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const isProcessing = useRef(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dayRef = useRef<TextInput>(null);
+  const monthRef = useRef<TextInput>(null);
+  const yearRef = useRef<TextInput>(null);
 
   // Reset state every time modal opens
   useEffect(() => {
     if (visible) {
       setScanned(false);
       setTorch(false);
+      setMode('scanning');
+      setScannedCode(null);
+      setProductName('');
+      setDay('');
+      setMonth('');
+      setYear('');
+      setSaving(false);
       isProcessing.current = false;
       if (closeTimer.current) clearTimeout(closeTimer.current);
     }
@@ -162,8 +199,10 @@ export function ScannerModal({ visible, onClose, onScan }: ScannerModalProps) {
 
       // Brief delay so the user sees the green confirmation frame
       closeTimer.current = setTimeout(() => {
-        onScan({ data, format, type });
-        onClose();
+        const code = { data, format, type };
+        setScannedCode(code);
+        onScan(code);
+        setMode('form');
       }, SCAN_DELAY_MS);
     },
     [scanned, onScan, onClose],
@@ -201,6 +240,214 @@ export function ScannerModal({ visible, onClose, onScan }: ScannerModalProps) {
     </View>
   );
 
+  // ---- Validation ----
+
+  const validateAndSubmit = useCallback(async () => {
+    const name = productName.trim();
+    if (!name) {
+      Alert.alert('Nome obrigatório', 'Digite o nome do produto.');
+      return;
+    }
+
+    const d = parseInt(day, 10);
+    const m = parseInt(month, 10);
+    const y = parseInt(year, 10);
+
+    if (!d || !m || !y || d < 1 || d > 31 || m < 1 || m > 12 || y < 2024 || y > 2100) {
+      Alert.alert('Data inválida', 'Verifique o dia, mês e ano da validade.');
+      return;
+    }
+
+    const expDate = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const exp = new Date(expDate + 'T00:00:00');
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    if (exp <= now) {
+      Alert.alert('Data inválida', 'A data de validade deve ser futura.');
+      return;
+    }
+
+    if (!scannedCode) return;
+
+    setSaving(true);
+
+    onProductRegister({
+      barcode: scannedCode.data,
+      format: scannedCode.format,
+      name,
+      expirationDate: expDate,
+    });
+
+    onClose();
+  }, [productName, day, month, year, scannedCode, onProductRegister, onClose]);
+
+  // ---- Render form ----
+
+  const renderProductForm = () => (
+    <KeyboardAvoidingView
+      style={formStyles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <SafeAreaView style={{ flex: 1 }}>
+        <ScrollView
+          contentContainerStyle={formStyles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header */}
+          <View style={formStyles.header}>
+            <Text style={formStyles.headerIcon}>✅</Text>
+            <Text style={formStyles.headerTitle}>Produto Escaneado</Text>
+            <Text style={formStyles.headerSubtitle}>
+              Código: {scannedCode?.data}
+            </Text>
+            <View style={formStyles.formatBadge}>
+              <Text style={formStyles.formatText}>{scannedCode?.format}</Text>
+            </View>
+          </View>
+
+          {/* Product name */}
+          <View style={formStyles.fieldGroup}>
+            <Text style={formStyles.label}>Nome do Produto</Text>
+            <TextInput
+              style={formStyles.input}
+              placeholder="Ex: Leite Integral"
+              placeholderTextColor="#999"
+              value={productName}
+              onChangeText={setProductName}
+              autoFocus
+              returnKeyType="next"
+              onSubmitEditing={() => dayRef.current?.focus()}
+            />
+          </View>
+
+          {/* Expiration date */}
+          <View style={formStyles.fieldGroup}>
+            <Text style={formStyles.label}>Data de Validade</Text>
+            <View style={formStyles.dateRow}>
+              <View style={formStyles.dateField}>
+                <Text style={formStyles.dateLabel}>Dia</Text>
+                <TextInput
+                  ref={dayRef}
+                  style={formStyles.dateInput}
+                  placeholder="DD"
+                  placeholderTextColor="#999"
+                  value={day}
+                  onChangeText={(t) => {
+                    const cleaned = t.replace(/[^0-9]/g, '').slice(0, 2);
+                    setDay(cleaned);
+                    if (cleaned.length === 2) monthRef.current?.focus();
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  returnKeyType="next"
+                />
+              </View>
+              <Text style={formStyles.dateSeparator}>/</Text>
+              <View style={formStyles.dateField}>
+                <Text style={formStyles.dateLabel}>Mês</Text>
+                <TextInput
+                  ref={monthRef}
+                  style={formStyles.dateInput}
+                  placeholder="MM"
+                  placeholderTextColor="#999"
+                  value={month}
+                  onChangeText={(t) => {
+                    const cleaned = t.replace(/[^0-9]/g, '').slice(0, 2);
+                    setMonth(cleaned);
+                    if (cleaned.length === 2) yearRef.current?.focus();
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  returnKeyType="next"
+                />
+              </View>
+              <Text style={formStyles.dateSeparator}>/</Text>
+              <View style={[formStyles.dateField, { flex: 1.5 }]}>
+                <Text style={formStyles.dateLabel}>Ano</Text>
+                <TextInput
+                  ref={yearRef}
+                  style={formStyles.dateInput}
+                  placeholder="AAAA"
+                  placeholderTextColor="#999"
+                  value={year}
+                  onChangeText={(t) => {
+                    const cleaned = t.replace(/[^0-9]/g, '').slice(0, 4);
+                    setYear(cleaned);
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={4}
+                  returnKeyType="done"
+                  onSubmitEditing={validateAndSubmit}
+                />
+              </View>
+            </View>
+          </View>
+
+          {/* Quick select buttons */}
+          <View style={formStyles.quickRow}>
+            {QUICK_DATES.map(({ label, months }) => {
+              const future = new Date();
+              future.setMonth(future.getMonth() + months);
+              return (
+                <Pressable
+                  key={label}
+                  style={({ pressed }) => [
+                    formStyles.quickBtn,
+                    pressed && formStyles.quickBtnPressed,
+                  ]}
+                  onPress={() => {
+                    setDay(String(future.getDate()).padStart(2, '0'));
+                    setMonth(String(future.getMonth() + 1).padStart(2, '0'));
+                    setYear(String(future.getFullYear()));
+                  }}
+                >
+                  <Text style={formStyles.quickBtnText}>{label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {/* Actions */}
+          <View style={formStyles.actions}>
+            <Pressable
+              style={({ pressed }) => [
+                formStyles.saveBtn,
+                pressed && formStyles.saveBtnPressed,
+              ]}
+              onPress={validateAndSubmit}
+              disabled={saving}
+            >
+              <Text style={formStyles.saveBtnText}>
+                {saving ? 'Salvando...' : 'Salvar Produto'}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                formStyles.cancelBtn,
+                pressed && formStyles.cancelBtnPressed,
+              ]}
+              onPress={() => {
+                if (closeTimer.current) clearTimeout(closeTimer.current);
+                setMode('scanning');
+                setScanned(false);
+                setProductName('');
+                setDay('');
+                setMonth('');
+                setYear('');
+                isProcessing.current = false;
+              }}
+            >
+              <Text style={formStyles.cancelBtnText}>Escanear outro</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    </KeyboardAvoidingView>
+  );
+
   // ---- Main render ----
 
   return (
@@ -218,6 +465,9 @@ export function ScannerModal({ visible, onClose, onScan }: ScannerModalProps) {
           ? renderPermissionView()
           : (
             <View style={styles.container}>
+              {mode === 'form' && scannedCode
+                ? renderProductForm()
+                : (
               <CameraView
                 style={StyleSheet.absoluteFill}
                 facing={facing}
@@ -283,6 +533,7 @@ export function ScannerModal({ visible, onClose, onScan }: ScannerModalProps) {
                   </SafeAreaView>
                 </View>
               </CameraView>
+              )}
             </View>
           )}
     </Modal>
@@ -554,5 +805,167 @@ const overlayStyles = StyleSheet.create({
   },
   controlLabelActive: {
     color: '#fff',
+  },
+});
+
+// ===========================================================================
+// Product Registration Form Styles
+// ===========================================================================
+
+const formStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f5f7',
+  },
+  scroll: {
+    paddingHorizontal: 24,
+    paddingBottom: 40,
+  },
+  header: {
+    alignItems: 'center',
+    paddingVertical: 24,
+    marginBottom: 8,
+  },
+  headerIcon: {
+    fontSize: 48,
+    marginBottom: 8,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#111',
+    marginBottom: 4,
+  },
+  headerSubtitle: {
+    fontSize: 13,
+    color: '#888',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginBottom: 8,
+  },
+  formatBadge: {
+    backgroundColor: '#0a7ea4',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  formatText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  fieldGroup: {
+    marginBottom: 20,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#555',
+    marginBottom: 8,
+    marginLeft: 2,
+  },
+  input: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 14 : 12,
+    fontSize: 16,
+    color: '#111',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  dateRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  dateField: {
+    flex: 1,
+  },
+  dateLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#888',
+    marginBottom: 4,
+    marginLeft: 2,
+  },
+  dateInput: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 14 : 12,
+    fontSize: 18,
+    color: '#111',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  dateSeparator: {
+    fontSize: 24,
+    color: '#999',
+    paddingBottom: Platform.OS === 'ios' ? 14 : 12,
+    fontWeight: '300',
+  },
+  quickRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 24,
+  },
+  quickBtn: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  quickBtnPressed: {
+    backgroundColor: '#e8f4f8',
+    borderColor: '#0a7ea4',
+  },
+  quickBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0a7ea4',
+  },
+  actions: {
+    gap: 12,
+  },
+  saveBtn: {
+    backgroundColor: '#0a7ea4',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    shadowColor: '#0a7ea4',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  saveBtnPressed: {
+    backgroundColor: '#086a8a',
+    transform: [{ scale: 0.98 }],
+  },
+  saveBtnText: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  cancelBtn: {
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+  },
+  cancelBtnPressed: {
+    backgroundColor: '#f5f5f5',
+  },
+  cancelBtnText: {
+    color: '#666',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

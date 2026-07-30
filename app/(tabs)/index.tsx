@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -11,61 +11,29 @@ import {
   View,
 } from 'react-native';
 
-import { ScannerModal, type ScannedCode } from '@/components/scanner-modal';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface HistoryItem {
-  id: string;
-  data: string;
-  format: string;
-  type: string;
-  scannedAt: Date;
-}
+import { ScannerModal, type ScannedCode, type ProductFormData } from '@/components/scanner-modal';
+import type { Product } from '@/types/product';
+import { daysUntilExpiration, getExpirationStatus } from '@/types/product';
+import { getProducts, createProduct, deleteProduct } from '@/services/storage';
+import {
+  scheduleExpirationReminders,
+  requestNotificationPermissions,
+  cancelProductNotifications,
+} from '@/services/notifications';
 
 // ---------------------------------------------------------------------------
 // Format helpers
 // ---------------------------------------------------------------------------
 
-function formatTime(date: Date): string {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHour = Math.floor(diffMin / 60);
-
-  if (diffSec < 60) return 'Agora mesmo';
-  if (diffMin < 60) return `Há ${diffMin} min`;
-  if (diffHour < 24) return `Há ${diffHour} h`;
-  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+function formatDate(isoDate: string): string {
+  const [y, m, d] = isoDate.split('-');
+  return `${d}/${m}/${y}`;
 }
 
-function truncateData(data: string, maxLen = 40): string {
-  if (data.length <= maxLen) return data;
-  return data.slice(0, maxLen - 3) + '...';
+function truncateBarcode(code: string, maxLen = 20): string {
+  if (code.length <= maxLen) return code;
+  return code.slice(0, maxLen - 3) + '...';
 }
-
-// ---------------------------------------------------------------------------
-// Format badge colours
-// ---------------------------------------------------------------------------
-
-const FORMAT_COLORS: Record<string, string> = {
-  'QR Code': '#8e44ad',
-  'EAN-13': '#0a7ea4',
-  'EAN-8': '#2980b9',
-  'Code 39': '#27ae60',
-  'Code 93': '#2ecc71',
-  'Code 128': '#d35400',
-  'UPC-A': '#c0392b',
-  'UPC-E': '#e74c3c',
-  'ITF-14': '#f39c12',
-  Codabar: '#1abc9c',
-  PDF417: '#9b59b6',
-  'Data Matrix': '#34495e',
-  Aztec: '#7f8c8d',
-};
 
 // ---------------------------------------------------------------------------
 // HomeScreen
@@ -73,48 +41,122 @@ const FORMAT_COLORS: Record<string, string> = {
 
 export default function HomeScreen() {
   const [scannerVisible, setScannerVisible] = useState(false);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [notificationsGranted, setNotificationsGranted] = useState(false);
+
+  // ---- Load products on mount ----
+
+  const loadProducts = useCallback(async () => {
+    const stored = await getProducts();
+    setProducts(stored);
+  }, []);
+
+  useEffect(() => {
+    loadProducts();
+  }, [loadProducts]);
+
+  // ---- Notification permissions on first launch ----
+
+  useEffect(() => {
+    (async () => {
+      const granted = await requestNotificationPermissions();
+      setNotificationsGranted(granted);
+    })();
+  }, []);
 
   // ---- Handlers ----
 
-  const handleScan = useCallback((code: ScannedCode) => {
-    const item: HistoryItem = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      data: code.data,
-      format: code.format,
-      type: code.type,
-      scannedAt: new Date(),
-    };
-    setHistory((prev) => [item, ...prev]);
+  const handleScan = useCallback((_code: ScannedCode) => {
+    // We don't need to do anything here, the onProductRegister will handle it
   }, []);
+
+  const handleProductRegister = useCallback(
+    async (data: ProductFormData) => {
+      // Save product
+      const product = await createProduct({
+        barcode: data.barcode,
+        format: data.format,
+        name: data.name,
+        expirationDate: data.expirationDate,
+        notificationIds: [],
+      });
+
+      // Schedule notifications
+      try {
+        if (notificationsGranted) {
+          await scheduleExpirationReminders(product);
+        }
+      } catch {
+        // Notifications may fail on some devices
+      }
+
+      // Reload products
+      await loadProducts();
+    },
+    [notificationsGranted, loadProducts],
+  );
 
   const openScanner = useCallback(() => setScannerVisible(true), []);
   const closeScanner = useCallback(() => setScannerVisible(false), []);
 
-  const clearHistory = useCallback(() => {
-    if (history.length === 0) return;
-    Alert.alert('Limpar Histórico', 'Tem certeza que deseja limpar todo o histórico de escaneamentos?', [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Limpar', style: 'destructive', onPress: () => setHistory([]) },
-    ]);
-  }, [history]);
+  const handleDelete = useCallback(
+    (product: Product) => {
+      Alert.alert(
+        'Remover Produto',
+        `Tem certeza que deseja remover "${product.name}"?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Remover',
+            style: 'destructive',
+            onPress: async () => {
+              await cancelProductNotifications(product);
+              await deleteProduct(product.id);
+              await loadProducts();
+            },
+          },
+        ],
+      );
+    },
+    [loadProducts],
+  );
 
-  // ---- Render item ----
+  // ---- Render product item ----
 
-  const renderHistoryItem = ({ item }: { item: HistoryItem }) => {
-    const bgColor = FORMAT_COLORS[item.format] || '#555';
+  const renderProduct = ({ item }: { item: Product }) => {
+    const days = daysUntilExpiration(item.expirationDate);
+    const status = getExpirationStatus(days);
+
     return (
-      <View style={itemStyles.container}>
-        <View style={[itemStyles.badge, { backgroundColor: bgColor }]}>
-          <Text style={itemStyles.badgeText}>{item.format}</Text>
-        </View>
-        <View style={itemStyles.content}>
-          <Text style={itemStyles.data} numberOfLines={2}>
-            {truncateData(item.data)}
+      <Pressable
+        style={({ pressed }) => [prodStyles.card, pressed && prodStyles.cardPressed]}
+        onLongPress={() => handleDelete(item)}
+        delayLongPress={500}
+      >
+        {/* Status indicator */}
+        <View style={[prodStyles.statusDot, { backgroundColor: status.bgColor }]} />
+
+        <View style={prodStyles.content}>
+          <Text style={prodStyles.name} numberOfLines={1}>
+            {item.name}
           </Text>
-          <Text style={itemStyles.time}>{formatTime(item.scannedAt)}</Text>
+          <Text style={prodStyles.barcode}>{truncateBarcode(item.barcode)}</Text>
+          <View style={prodStyles.meta}>
+            <Text style={prodStyles.date}>Val: {formatDate(item.expirationDate)}</Text>
+            <Text style={prodStyles.formatBadge}>{item.format}</Text>
+          </View>
         </View>
-      </View>
+
+        {/* Days badge */}
+        <View style={[prodStyles.daysBadge, { backgroundColor: status.bgColor }]}>
+          <Text style={[prodStyles.daysNumber, { color: status.color }]}>
+            {days < 0 ? `${Math.abs(days)}d` : days}
+          </Text>
+          <Text style={[prodStyles.daysLabel, { color: status.color }]}>
+            {days < 0 ? 'atrasado' : days === 1 ? 'dia' : 'dias'}
+          </Text>
+        </View>
+      </Pressable>
     );
   };
 
@@ -122,13 +164,40 @@ export default function HomeScreen() {
 
   const renderEmptyState = () => (
     <View style={emptyStyles.container}>
-      <Text style={emptyStyles.icon}>📷</Text>
-      <Text style={emptyStyles.title}>Nenhum código lido ainda</Text>
+      <Text style={emptyStyles.icon}>📦</Text>
+      <Text style={emptyStyles.title}>Nenhum produto cadastrado</Text>
       <Text style={emptyStyles.subtitle}>
-        Toque no botão flutuante{'\n'}para escanear um código de barras ou QR Code
+        Escaneie um código de barras{'\n'}para adicionar produtos com validade
       </Text>
     </View>
   );
+
+  // ---- Summary bar ----
+
+  const renderSummary = () => {
+    const expiringSoon = products.filter((p) => {
+      const d = daysUntilExpiration(p.expirationDate);
+      return d >= 0 && d <= 7;
+    });
+    const expired = products.filter((p) => daysUntilExpiration(p.expirationDate) < 0);
+
+    return (
+      <View style={pageStyles.summaryRow}>
+        <View style={[pageStyles.summaryChip, { backgroundColor: '#e74c3c15' }]}>
+          <Text style={[pageStyles.summaryValue, { color: '#e74c3c' }]}>{expired.length}</Text>
+          <Text style={[pageStyles.summaryLabel, { color: '#e74c3c' }]}>Vencidos</Text>
+        </View>
+        <View style={[pageStyles.summaryChip, { backgroundColor: '#e67e2215' }]}>
+          <Text style={[pageStyles.summaryValue, { color: '#e67e22' }]}>{expiringSoon.length}</Text>
+          <Text style={[pageStyles.summaryLabel, { color: '#e67e22' }]}>A vencer (7d)</Text>
+        </View>
+        <View style={[pageStyles.summaryChip, { backgroundColor: '#0a7ea415' }]}>
+          <Text style={[pageStyles.summaryValue, { color: '#0a7ea4' }]}>{products.length}</Text>
+          <Text style={[pageStyles.summaryLabel, { color: '#0a7ea4' }]}>Total</Text>
+        </View>
+      </View>
+    );
+  };
 
   // ---- Main render ----
 
@@ -140,32 +209,32 @@ export default function HomeScreen() {
       <View style={pageStyles.header}>
         <View>
           <Text style={pageStyles.title}>Validade</Text>
-          <Text style={pageStyles.subtitle}>Leitor de Códigos de Barras</Text>
+          <Text style={pageStyles.subtitle}>Controle de Vencimentos</Text>
         </View>
 
-        {history.length > 0 && (
-          <Pressable onPress={clearHistory} hitSlop={8}>
-            <Text style={pageStyles.clearBtn}>Limpar</Text>
+        {!notificationsGranted && (
+          <Pressable
+            onPress={async () => {
+              const granted = await requestNotificationPermissions();
+              setNotificationsGranted(granted);
+            }}
+            hitSlop={8}
+          >
+            <Text style={pageStyles.permBtn}>🔔 Ativar</Text>
           </Pressable>
         )}
       </View>
 
-      {/* Counter row */}
-      {history.length > 0 && (
-        <View style={pageStyles.counterRow}>
-          <Text style={pageStyles.counterText}>
-            {history.length} {history.length === 1 ? 'item escaneado' : 'itens escaneados'}
-          </Text>
-        </View>
-      )}
+      {/* Summary */}
+      {products.length > 0 && renderSummary()}
 
-      {/* History list */}
+      {/* Product list */}
       <FlatList
-        data={history}
+        data={products}
         keyExtractor={(item) => item.id}
-        renderItem={renderHistoryItem}
+        renderItem={renderProduct}
         ListEmptyComponent={renderEmptyState}
-        contentContainerStyle={history.length === 0 ? pageStyles.emptyListContainer : pageStyles.listContainer}
+        contentContainerStyle={products.length === 0 ? pageStyles.emptyListContainer : pageStyles.listContainer}
         showsVerticalScrollIndicator={false}
       />
 
@@ -182,6 +251,7 @@ export default function HomeScreen() {
         visible={scannerVisible}
         onClose={closeScanner}
         onScan={handleScan}
+        onProductRegister={handleProductRegister}
       />
     </SafeAreaView>
   );
@@ -216,23 +286,35 @@ const pageStyles = StyleSheet.create({
     marginTop: 2,
     fontWeight: '500',
   },
-  clearBtn: {
-    fontSize: 15,
+  permBtn: {
+    fontSize: 14,
     color: '#0a7ea4',
     fontWeight: '600',
   },
-  counterRow: {
+  summaryRow: {
+    flexDirection: 'row',
     paddingHorizontal: 24,
     paddingBottom: 12,
+    gap: 10,
   },
-  counterText: {
-    fontSize: 13,
-    color: '#999',
-    fontWeight: '500',
+  summaryChip: {
+    flex: 1,
+    alignItems: 'center',
+    borderRadius: 12,
+    paddingVertical: 10,
+  },
+  summaryValue: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  summaryLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 2,
   },
   listContainer: {
     paddingHorizontal: 16,
-    paddingBottom: 100, // space for FAB
+    paddingBottom: 100,
   },
   emptyListContainer: {
     flex: 1,
@@ -241,8 +323,8 @@ const pageStyles = StyleSheet.create({
   },
 });
 
-const itemStyles = StyleSheet.create({
-  container: {
+const prodStyles = StyleSheet.create({
+  card: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
@@ -257,33 +339,68 @@ const itemStyles = StyleSheet.create({
     // Shadow (Android)
     elevation: 2,
   },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    marginRight: 14,
-    minWidth: 56,
-    alignItems: 'center',
+  cardPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
   },
-  badgeText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '700',
+  statusDot: {
+    width: 4,
+    height: 40,
+    borderRadius: 2,
+    marginRight: 14,
   },
   content: {
     flex: 1,
   },
-  data: {
-    fontSize: 15,
-    fontWeight: '500',
+  name: {
+    fontSize: 16,
+    fontWeight: '700',
     color: '#222',
     lineHeight: 20,
   },
-  time: {
-    fontSize: 12,
+  barcode: {
+    fontSize: 11,
     color: '#aaa',
-    marginTop: 4,
-    fontWeight: '400',
+    marginTop: 2,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  meta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  date: {
+    fontSize: 12,
+    color: '#777',
+    fontWeight: '500',
+  },
+  formatBadge: {
+    fontSize: 10,
+    color: '#0a7ea4',
+    fontWeight: '700',
+    backgroundColor: '#e8f4f8',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  daysBadge: {
+    alignItems: 'center',
+    minWidth: 56,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    marginLeft: 10,
+  },
+  daysNumber: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  daysLabel: {
+    fontSize: 9,
+    fontWeight: '600',
+    marginTop: 1,
   },
 });
 
