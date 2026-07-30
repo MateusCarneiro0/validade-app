@@ -137,15 +137,27 @@ export default function ProdutosScreen() {
 
     const expDate = `${yNum}-${String(mNum).padStart(2, '0')}-${String(dNum).padStart(2, '0')}`;
 
-    const updated = await updateProduct(editProduct.id, {
-      name,
-      lote: editLote.trim() || undefined,
-      quantidade: editQtd.trim() ? Number(editQtd) : undefined,
-      expirationDate: expDate,
-    });
+    try {
+      const updated = await updateProduct(editProduct.id, {
+        name,
+        lote: editLote.trim() || undefined,
+        quantidade: editQtd.trim() ? Number(editQtd) : undefined,
+        expirationDate: expDate,
+      });
 
-    if (updated) {
-      await rescheduleExpirationReminders(updated);
+      if (updated) {
+        // Usar try/catch separado para notificações — o salvamento dos dados
+        // já ocorreu, então não deve impedir o fechamento do modal mesmo
+        // que o reagendamento falhe (ex: sem permissão de notificação).
+        try {
+          await rescheduleExpirationReminders(updated);
+        } catch {
+          // Falha no reagendamento não deve impedir a edição.
+        }
+      }
+    } catch {
+      Alert.alert('Erro ao salvar', 'Não foi possível salvar as alterações. Tente novamente.');
+      return;
     }
 
     closeEdit();

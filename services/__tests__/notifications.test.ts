@@ -178,6 +178,46 @@ describe('scheduleExpirationReminders', () => {
 
     jest.useRealTimers();
   });
+
+  it('continua agendando mesmo se uma notificação individual falhar', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-01T10:00:00Z'));
+
+    // Make the 2nd notification call fail (15d - index 1)
+    const scheduleMock = jest.mocked(Notifications.scheduleNotificationAsync);
+    scheduleMock
+      .mockResolvedValueOnce('notif-ok-1')  // 30d → ok
+      .mockRejectedValueOnce(new Error('Falha ao agendar'))  // 15d → fail
+      .mockResolvedValueOnce('notif-ok-2')  // 7d → ok
+      .mockResolvedValueOnce('notif-ok-3'); // 0d → ok
+
+    const product = makeProduct({ expirationDate: '2026-09-30' }); // 60+ days out
+    const ids = await scheduleExpirationReminders(product);
+
+    // Should have 3 IDs (30d, 7d, 0d) — 15d failed but was caught
+    expect(ids).toHaveLength(3);
+    expect(ids).toEqual(['notif-ok-1', 'notif-ok-2', 'notif-ok-3']);
+
+    jest.useRealTimers();
+  });
+
+  it('retorna array vazio se todas as notificações falharem', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-01T10:00:00Z'));
+
+    const scheduleMock = jest.mocked(Notifications.scheduleNotificationAsync);
+    scheduleMock.mockRejectedValue(new Error('Sem permissão'));
+
+    const product = makeProduct({ expirationDate: '2026-09-30' });
+    const ids = await scheduleExpirationReminders(product);
+
+    // Todas falharam, array vazio
+    expect(ids).toHaveLength(0);
+    // Não deve tentar persistir IDs vazios
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(4);
+
+    jest.useRealTimers();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -59,6 +59,14 @@ beforeEach(async () => {
   jest.clearAllMocks();
   notifCounter = 0;
   await AsyncStorage.clear();
+
+  // Restore the default mock implementation of scheduleNotificationAsync
+  // (jest.clearAllMocks resets call count but NOT the implementation)
+  const notifMock = jest.mocked(Notifications.scheduleNotificationAsync);
+  notifMock.mockImplementation(async () => {
+    notifCounter++;
+    return `notif-integration-${notifCounter}`;
+  });
 });
 
 // ===========================================================================
@@ -235,6 +243,83 @@ describe('Fluxo Completo: Edição de Produto', () => {
   it('2.5 - Retorna null ao editar produto inexistente', async () => {
     const result = await updateProduct('non-existent-id', { name: 'Teste' });
     expect(result).toBeNull();
+  });
+
+  it('2.6 - Edita produto mesmo quando rescheduleExpirationReminders falha (dados persistem)', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-01T10:00:00Z'));
+
+    const product = await createCompleteProduct({
+      name: 'Produto Original',
+      expirationDate: '2026-12-31',
+    });
+    expect(product.name).toBe('Produto Original');
+
+    // Agendar notificações iniciais
+    await scheduleExpirationReminders(product);
+
+    // Fazer o scheduleNotificationAsync lançar erro para simular
+    // falha no reagendamento (ex: sem permissão no dispositivo)
+    const scheduleMock = jest.mocked(Notifications.scheduleNotificationAsync);
+    scheduleMock.mockRejectedValue(new Error('Sem permissão de notificação'));
+
+    // Atualizar o produto — mesmo que rescheduleExpirationReminders falhe,
+    // os dados do produto DEVEM persistir
+    const updated = await updateProduct(product.id, {
+      name: 'Produto Editado',
+      lote: 'NOVO-LOTE',
+      quantidade: 50,
+      expirationDate: '2027-06-01',
+    });
+    expect(updated).not.toBeNull();
+    expect(updated!.name).toBe('Produto Editado');
+
+    // rescheduleExpirationReminders vai falhar (mock rejeita),
+    // mas o catch interno não deve propagar o erro
+    await expect(rescheduleExpirationReminders(updated!)).resolves.not.toThrow();
+
+    // Verificar que os dados do produto foram salvos mesmo com falha nas notificações
+    const found = await getProductById(product.id);
+    expect(found).not.toBeNull();
+    expect(found!.name).toBe('Produto Editado');
+    expect(found!.lote).toBe('NOVO-LOTE');
+    expect(found!.quantidade).toBe(50);
+    expect(found!.expirationDate).toBe('2027-06-01');
+
+    jest.useRealTimers();
+  });
+
+  it('2.7 - Edita produto sem notificações existentes e dados persistem', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-01T10:00:00Z'));
+
+    // Produto SEM notificações agendadas
+    const product = await createCompleteProduct({
+      name: 'Sem Notificação',
+      expirationDate: '2027-12-31',
+    });
+    // Não agendar notificações — notificationIds = []
+
+    // Editar o produto
+    const updated = await updateProduct(product.id, {
+      name: 'Editado Sem Notificação',
+      quantidade: 100,
+    });
+
+    expect(updated).not.toBeNull();
+    expect(updated!.name).toBe('Editado Sem Notificação');
+    expect(updated!.quantidade).toBe(100);
+
+    // Agendar notificações após edição (deve funcionar)
+    const ids = await rescheduleExpirationReminders(updated!);
+    expect(ids.length).toBeGreaterThan(0);
+
+    // Verificar persistência
+    const found = await getProductById(product.id);
+    expect(found!.name).toBe('Editado Sem Notificação');
+    expect(found!.quantidade).toBe(100);
+
+    jest.useRealTimers();
   });
 });
 

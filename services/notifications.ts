@@ -88,27 +88,32 @@ export async function scheduleExpirationReminders(product: Product): Promise<str
       triggerDate.setDate(triggerDate.getDate() - daysBefore);
       triggerDate.setHours(9, 0, 0, 0); // Notify at 9:00 AM
 
-      const notificationId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: daysBefore === 0
-            ? '📦 Produto vence hoje!'
-            : '📦 Produto próximo do vencimento!',
-          body: daysBefore === 0
-            ? `O produto "${product.name}" vence hoje! Não se esqueça!`
-            : `O produto "${product.name}" está ${daysBefore} dias de vencer.`,
-          data: {
-            productId: product.id,
-            daysBefore,
+      try {
+        const notificationId = await Notifications.scheduleNotificationAsync({
+          content: {
+            title: daysBefore === 0
+              ? '📦 Produto vence hoje!'
+              : '📦 Produto próximo do vencimento!',
+            body: daysBefore === 0
+              ? `O produto "${product.name}" vence hoje! Não se esqueça!`
+              : `O produto "${product.name}" está ${daysBefore} dias de vencer.`,
+            data: {
+              productId: product.id,
+              daysBefore,
+            },
+            sound: true,
           },
-          sound: true,
-        },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: triggerDate,
-        },
-      });
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            date: triggerDate,
+          },
+        });
 
-      notificationIds.push(notificationId);
+        notificationIds.push(notificationId);
+      } catch {
+        // Falha ao agendar notificação individual não deve impedir
+        // as demais notificações ou o salvamento do produto.
+      }
     }
   }
 

@@ -19,6 +19,12 @@ const MAPPING = {
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
   'qrcode.viewfinder': 'qr-code-scanner',
+
+  // Tab bar icons
+  'plus.circle.fill': 'add-circle',
+  'shippingbox.fill': 'inventory-2',
+  'doc.text.fill': 'description',
+  'bell.fill': 'notifications',
 } as IconMapping;
 
 /**
