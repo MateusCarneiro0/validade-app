@@ -200,9 +200,8 @@ export function ScannerModal({ visible, onClose, onScan, onProductRegister }: Sc
       // Brief delay so the user sees the green confirmation frame
       closeTimer.current = setTimeout(() => {
         const code = { data, format, type };
-        setScannedCode(code);
         onScan(code);
-        setMode('form');
+        onClose();
       }, SCAN_DELAY_MS);
     },
     [scanned, onScan, onClose],

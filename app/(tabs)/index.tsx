@@ -1,61 +1,49 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
-  FlatList,
+  KeyboardAvoidingView,
   Platform,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   View,
+  Image,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 
 import { ScannerModal, type ScannedCode, type ProductFormData } from '@/components/scanner-modal';
-import type { Product } from '@/types/product';
-import { daysUntilExpiration, getExpirationStatus } from '@/types/product';
-import { getProducts, createProduct, deleteProduct } from '@/services/storage';
-import {
-  scheduleExpirationReminders,
-  requestNotificationPermissions,
-  cancelProductNotifications,
-} from '@/services/notifications';
+import { requestNotificationPermissions, scheduleExpirationReminders } from '@/services/notifications';
+import { createProduct } from '@/services/storage';
+import { fetchProductByBarcode } from '@/services/openfoodfacts';
 
 // ---------------------------------------------------------------------------
-// Format helpers
+// CadastroScreen
 // ---------------------------------------------------------------------------
 
-function formatDate(isoDate: string): string {
-  const [y, m, d] = isoDate.split('-');
-  return `${d}/${m}/${y}`;
-}
-
-function truncateBarcode(code: string, maxLen = 20): string {
-  if (code.length <= maxLen) return code;
-  return code.slice(0, maxLen - 3) + '...';
-}
-
-// ---------------------------------------------------------------------------
-// HomeScreen
-// ---------------------------------------------------------------------------
-
-export default function HomeScreen() {
+export default function CadastroScreen() {
+  const [barcode, setBarcode] = useState('');
+  const [format, setFormat] = useState('');
+  const [productName, setProductName] = useState('');
+  const [lote, setLote] = useState('');
+  const [quantidade, setQuantidade] = useState('');
+  const [day, setDay] = useState('');
+  const [month, setMonth] = useState('');
+  const [year, setYear] = useState('');
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [loadingApi, setLoadingApi] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [scannerVisible, setScannerVisible] = useState(false);
-  const [products, setProducts] = useState<Product[]>([]);
   const [notificationsGranted, setNotificationsGranted] = useState(false);
 
-  // ---- Load products on mount ----
+  const dayRef = useRef<TextInput>(null);
+  const monthRef = useRef<TextInput>(null);
+  const yearRef = useRef<TextInput>(null);
 
-  const loadProducts = useCallback(async () => {
-    const stored = await getProducts();
-    setProducts(stored);
-  }, []);
-
-  useEffect(() => {
-    loadProducts();
-  }, [loadProducts]);
-
-  // ---- Notification permissions on first launch ----
+  // ---- Init ----
 
   useEffect(() => {
     (async () => {
@@ -64,179 +52,339 @@ export default function HomeScreen() {
     })();
   }, []);
 
-  // ---- Handlers ----
+  // ---- Helpers ----
 
-  const handleScan = useCallback((_code: ScannedCode) => {
-    // We don't need to do anything here, the onProductRegister will handle it
+  const resetForm = useCallback(() => {
+    setBarcode('');
+    setFormat('');
+    setProductName('');
+    setLote('');
+    setQuantidade('');
+    setDay('');
+    setMonth('');
+    setYear('');
+    setImageUri(null);
+    setLoadingApi(false);
+    setSaving(false);
   }, []);
 
-  const handleProductRegister = useCallback(
-    async (data: ProductFormData) => {
-      // Save product
-      const product = await createProduct({
-        barcode: data.barcode,
-        format: data.format,
-        name: data.name,
-        expirationDate: data.expirationDate,
-        notificationIds: [],
-      });
-
-      // Schedule notifications
-      try {
-        if (notificationsGranted) {
-          await scheduleExpirationReminders(product);
-        }
-      } catch {
-        // Notifications may fail on some devices
-      }
-
-      // Reload products
-      await loadProducts();
-    },
-    [notificationsGranted, loadProducts],
-  );
+  // ---- Scanner ----
 
   const openScanner = useCallback(() => setScannerVisible(true), []);
   const closeScanner = useCallback(() => setScannerVisible(false), []);
 
-  const handleDelete = useCallback(
-    (product: Product) => {
-      Alert.alert(
-        'Remover Produto',
-        `Tem certeza que deseja remover "${product.name}"?`,
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Remover',
-            style: 'destructive',
-            onPress: async () => {
-              await cancelProductNotifications(product);
-              await deleteProduct(product.id);
-              await loadProducts();
-            },
-          },
-        ],
-      );
-    },
-    [loadProducts],
-  );
+  const handleScan = useCallback((code: ScannedCode) => {
+    setBarcode(code.data);
+    setFormat(code.format);
+  }, []);
 
-  // ---- Render product item ----
+  const handleProductRegister = useCallback((_data: ProductFormData) => {
+    // handled via handleScan + form fields
+  }, []);
 
-  const renderProduct = ({ item }: { item: Product }) => {
-    const days = daysUntilExpiration(item.expirationDate);
-    const status = getExpirationStatus(days);
+  // ---- Open Food Facts ----
 
-    return (
-      <Pressable
-        style={({ pressed }) => [prodStyles.card, pressed && prodStyles.cardPressed]}
-        onLongPress={() => handleDelete(item)}
-        delayLongPress={500}
-      >
-        {/* Status indicator */}
-        <View style={[prodStyles.statusDot, { backgroundColor: status.bgColor }]} />
+  const lookupBarcode = useCallback(async () => {
+    const code = barcode.trim();
+    if (!code) {
+      Alert.alert('Código vazio', 'Escaneie ou digite um código de barras primeiro.');
+      return;
+    }
 
-        <View style={prodStyles.content}>
-          <Text style={prodStyles.name} numberOfLines={1}>
-            {item.name}
-          </Text>
-          <Text style={prodStyles.barcode}>{truncateBarcode(item.barcode)}</Text>
-          <View style={prodStyles.meta}>
-            <Text style={prodStyles.date}>Val: {formatDate(item.expirationDate)}</Text>
-            <Text style={prodStyles.formatBadge}>{item.format}</Text>
-          </View>
-        </View>
+    setLoadingApi(true);
+    try {
+      const result = await fetchProductByBarcode(code);
+      if (result.found && result.name) {
+        setProductName(result.name);
+        if (result.imageUrl && !imageUri) {
+          setImageUri(result.imageUrl);
+        }
+        Alert.alert('Produto encontrado!', `Nome: ${result.name}`);
+      } else {
+        Alert.alert('Produto não encontrado', 'Digite o nome manualmente.');
+      }
+    } catch {
+      Alert.alert('Erro', 'Não foi possível consultar a API.');
+    } finally {
+      setLoadingApi(false);
+    }
+  }, [barcode, imageUri]);
 
-        {/* Days badge */}
-        <View style={[prodStyles.daysBadge, { backgroundColor: status.bgColor }]}>
-          <Text style={[prodStyles.daysNumber, { color: status.color }]}>
-            {days < 0 ? `${Math.abs(days)}d` : days}
-          </Text>
-          <Text style={[prodStyles.daysLabel, { color: status.color }]}>
-            {days < 0 ? 'atrasado' : days === 1 ? 'dia' : 'dias'}
-          </Text>
-        </View>
-      </Pressable>
-    );
-  };
+  // ---- Photo ----
 
-  // ---- Empty state ----
+  const takePhoto = useCallback(async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Permissão necessária', 'Precisamos de acesso à câmera para tirar foto.');
+      return;
+    }
 
-  const renderEmptyState = () => (
-    <View style={emptyStyles.container}>
-      <Text style={emptyStyles.icon}>📦</Text>
-      <Text style={emptyStyles.title}>Nenhum produto cadastrado</Text>
-      <Text style={emptyStyles.subtitle}>
-        Escaneie um código de barras{'\n'}para adicionar produtos com validade
-      </Text>
-    </View>
-  );
-
-  // ---- Summary bar ----
-
-  const renderSummary = () => {
-    const expiringSoon = products.filter((p) => {
-      const d = daysUntilExpiration(p.expirationDate);
-      return d >= 0 && d <= 7;
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
     });
-    const expired = products.filter((p) => daysUntilExpiration(p.expirationDate) < 0);
 
-    return (
-      <View style={pageStyles.summaryRow}>
-        <View style={[pageStyles.summaryChip, { backgroundColor: '#e74c3c15' }]}>
-          <Text style={[pageStyles.summaryValue, { color: '#e74c3c' }]}>{expired.length}</Text>
-          <Text style={[pageStyles.summaryLabel, { color: '#e74c3c' }]}>Vencidos</Text>
-        </View>
-        <View style={[pageStyles.summaryChip, { backgroundColor: '#e67e2215' }]}>
-          <Text style={[pageStyles.summaryValue, { color: '#e67e22' }]}>{expiringSoon.length}</Text>
-          <Text style={[pageStyles.summaryLabel, { color: '#e67e22' }]}>A vencer (7d)</Text>
-        </View>
-        <View style={[pageStyles.summaryChip, { backgroundColor: '#0a7ea415' }]}>
-          <Text style={[pageStyles.summaryValue, { color: '#0a7ea4' }]}>{products.length}</Text>
-          <Text style={[pageStyles.summaryLabel, { color: '#0a7ea4' }]}>Total</Text>
-        </View>
-      </View>
-    );
+    if (!result.canceled && result.assets?.[0]?.uri) {
+      setImageUri(result.assets[0].uri);
+    }
+  }, []);
+
+  // ---- Save ----
+
+  const handleSave = useCallback(async () => {
+    const name = productName.trim();
+    if (!name) {
+      Alert.alert('Nome obrigatório', 'Digite o nome do produto.');
+      return;
+    }
+
+    const d = parseInt(day, 10);
+    const m = parseInt(month, 10);
+    const y = parseInt(year, 10);
+
+    if (!d || !m || !y || d < 1 || d > 31 || m < 1 || m > 12 || y < 2024 || y > 2100) {
+      Alert.alert('Data inválida', 'Verifique a data de validade.');
+      return;
+    }
+
+    const expDate = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const exp = new Date(expDate + 'T00:00:00');
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
+    if (exp <= now) {
+      Alert.alert('Data inválida', 'A data de validade deve ser futura.');
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const product = await createProduct({
+        barcode: barcode || 'manual',
+        format: format || 'Manual',
+        name,
+        lote: lote.trim() || undefined,
+        quantidade: quantidade.trim() ? Number(quantidade) : undefined,
+        imagem: imageUri || undefined,
+        expirationDate: expDate,
+        notificationIds: [],
+      });
+
+      if (notificationsGranted) {
+        await scheduleExpirationReminders(product);
+      }
+
+      Alert.alert('Sucesso!', `Produto "${name}" cadastrado com sucesso.`, [
+        { text: 'OK', onPress: resetForm },
+      ]);
+    } catch {
+      Alert.alert('Erro', 'Não foi possível salvar o produto.');
+    } finally {
+      setSaving(false);
+    }
+  }, [productName, day, month, year, barcode, format, lote, quantidade, imageUri, notificationsGranted, resetForm]);
+
+  // ---- Quick dates ----
+
+  const QUICK_DATES = [
+    { label: '1 mês', months: 1 },
+    { label: '3 meses', months: 3 },
+    { label: '6 meses', months: 6 },
+    { label: '1 ano', months: 12 },
+  ] as const;
+
+  const setQuickDate = (months: number) => {
+    const future = new Date();
+    future.setMonth(future.getMonth() + months);
+    setDay(String(future.getDate()).padStart(2, '0'));
+    setMonth(String(future.getMonth() + 1).padStart(2, '0'));
+    setYear(String(future.getFullYear()));
   };
 
-  // ---- Main render ----
+  // ---- Render ----
 
   return (
     <SafeAreaView style={pageStyles.safe}>
       <StatusBar barStyle="dark-content" />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={pageStyles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header */}
+          <View style={pageStyles.header}>
+            <Text style={pageStyles.title}>Cadastro</Text>
+            <Text style={pageStyles.subtitle}>Adicionar novo produto</Text>
+          </View>
 
-      {/* Header */}
-      <View style={pageStyles.header}>
-        <View>
-          <Text style={pageStyles.title}>Validade</Text>
-          <Text style={pageStyles.subtitle}>Controle de Vencimentos</Text>
-        </View>
-
-        {!notificationsGranted && (
-          <Pressable
-            onPress={async () => {
-              const granted = await requestNotificationPermissions();
-              setNotificationsGranted(granted);
-            }}
-            hitSlop={8}
-          >
-            <Text style={pageStyles.permBtn}>🔔 Ativar</Text>
+          {/* Photo */}
+          <Pressable style={pageStyles.photoArea} onPress={takePhoto}>
+            {imageUri ? (
+              <Image source={{ uri: imageUri }} style={pageStyles.photo} />
+            ) : (
+              <View style={pageStyles.photoPlaceholder}>
+                <Text style={pageStyles.photoPlaceholderIcon}>📷</Text>
+                <Text style={pageStyles.photoPlaceholderText}>Tirar Foto</Text>
+              </View>
+            )}
           </Pressable>
-        )}
-      </View>
 
-      {/* Summary */}
-      {products.length > 0 && renderSummary()}
+          {/* Barcode field */}
+          <View style={fieldStyles.group}>
+            <Text style={fieldStyles.label}>Código de Barras</Text>
+            <View style={fieldStyles.row}>
+              <TextInput
+                style={[fieldStyles.input, { flex: 1 }]}
+                placeholder="Ex: 7891234567890"
+                placeholderTextColor="#999"
+                value={barcode}
+                onChangeText={setBarcode}
+                autoCapitalize="none"
+                returnKeyType="search"
+                onSubmitEditing={lookupBarcode}
+              />
+              <Pressable
+                style={({ pressed }) => [fieldStyles.smallBtn, pressed && fieldStyles.smallBtnPressed]}
+                onPress={lookupBarcode}
+                disabled={loadingApi}
+              >
+                <Text style={fieldStyles.smallBtnText}>
+                  {loadingApi ? '...' : '🔍'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
 
-      {/* Product list */}
-      <FlatList
-        data={products}
-        keyExtractor={(item) => item.id}
-        renderItem={renderProduct}
-        ListEmptyComponent={renderEmptyState}
-        contentContainerStyle={products.length === 0 ? pageStyles.emptyListContainer : pageStyles.listContainer}
-        showsVerticalScrollIndicator={false}
-      />
+          {/* Product name */}
+          <View style={fieldStyles.group}>
+            <Text style={fieldStyles.label}>Nome do Produto</Text>
+            <TextInput
+              style={fieldStyles.input}
+              placeholder="Ex: Leite Integral"
+              placeholderTextColor="#999"
+              value={productName}
+              onChangeText={setProductName}
+              returnKeyType="next"
+              onSubmitEditing={() => dayRef.current?.focus()}
+            />
+          </View>
+
+          {/* Lote & Quantidade row */}
+          <View style={fieldStyles.row}>
+            <View style={[fieldStyles.group, { flex: 1, marginRight: 8 }]}>
+              <Text style={fieldStyles.label}>Lote</Text>
+              <TextInput
+                style={fieldStyles.input}
+                placeholder="Lote 123"
+                placeholderTextColor="#999"
+                value={lote}
+                onChangeText={setLote}
+                returnKeyType="next"
+              />
+            </View>
+            <View style={[fieldStyles.group, { flex: 1, marginLeft: 8 }]}>
+              <Text style={fieldStyles.label}>Quantidade</Text>
+              <TextInput
+                style={fieldStyles.input}
+                placeholder="10"
+                placeholderTextColor="#999"
+                value={quantidade}
+                onChangeText={setQuantidade}
+                keyboardType="number-pad"
+                returnKeyType="next"
+              />
+            </View>
+          </View>
+
+          {/* Expiration date */}
+          <View style={fieldStyles.group}>
+            <Text style={fieldStyles.label}>Data de Validade</Text>
+            <View style={fieldStyles.dateRow}>
+              <View style={fieldStyles.dateField}>
+                <TextInput
+                  ref={dayRef}
+                  style={fieldStyles.dateInput}
+                  placeholder="DD"
+                  placeholderTextColor="#999"
+                  value={day}
+                  onChangeText={(t) => {
+                    const cleaned = t.replace(/[^0-9]/g, '').slice(0, 2);
+                    setDay(cleaned);
+                    if (cleaned.length === 2) monthRef.current?.focus();
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                />
+              </View>
+              <Text style={fieldStyles.dateSep}>/</Text>
+              <View style={fieldStyles.dateField}>
+                <TextInput
+                  ref={monthRef}
+                  style={fieldStyles.dateInput}
+                  placeholder="MM"
+                  placeholderTextColor="#999"
+                  value={month}
+                  onChangeText={(t) => {
+                    const cleaned = t.replace(/[^0-9]/g, '').slice(0, 2);
+                    setMonth(cleaned);
+                    if (cleaned.length === 2) yearRef.current?.focus();
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                />
+              </View>
+              <Text style={fieldStyles.dateSep}>/</Text>
+              <View style={[fieldStyles.dateField, { flex: 1.5 }]}>
+                <TextInput
+                  ref={yearRef}
+                  style={fieldStyles.dateInput}
+                  placeholder="AAAA"
+                  placeholderTextColor="#999"
+                  value={year}
+                  onChangeText={(t) => {
+                    const cleaned = t.replace(/[^0-9]/g, '').slice(0, 4);
+                    setYear(cleaned);
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={4}
+                  returnKeyType="done"
+                  onSubmitEditing={handleSave}
+                />
+              </View>
+            </View>
+            {/* Quick dates */}
+            <View style={fieldStyles.quickRow}>
+              {QUICK_DATES.map(({ label, months }) => (
+                <Pressable
+                  key={label}
+                  style={({ pressed }) => [fieldStyles.quickBtn, pressed && fieldStyles.quickBtnPressed]}
+                  onPress={() => setQuickDate(months)}
+                >
+                  <Text style={fieldStyles.quickBtnText}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+
+          {/* Save */}
+          <Pressable
+            style={({ pressed }) => [fieldStyles.saveBtn, pressed && fieldStyles.saveBtnPressed]}
+            onPress={handleSave}
+            disabled={saving}
+          >
+            <Text style={fieldStyles.saveBtnText}>
+              {saving ? 'Salvando...' : 'Salvar Produto'}
+            </Text>
+          </Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* FAB */}
       <Pressable
@@ -262,171 +410,89 @@ export default function HomeScreen() {
 // ===========================================================================
 
 const pageStyles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#f5f5f7',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: Platform.OS === 'ios' ? 12 : 20,
-    paddingBottom: 8,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#111',
-    letterSpacing: -0.5,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#888',
-    marginTop: 2,
-    fontWeight: '500',
-  },
-  permBtn: {
-    fontSize: 14,
-    color: '#0a7ea4',
-    fontWeight: '600',
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 24,
-    paddingBottom: 12,
-    gap: 10,
-  },
-  summaryChip: {
-    flex: 1,
-    alignItems: 'center',
-    borderRadius: 12,
-    paddingVertical: 10,
-  },
-  summaryValue: {
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  summaryLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  listContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 100,
-  },
-  emptyListContainer: {
-    flex: 1,
+  safe: { flex: 1, backgroundColor: '#f5f5f7' },
+  scroll: { paddingHorizontal: 24, paddingBottom: 120 },
+  header: { paddingTop: Platform.OS === 'ios' ? 12 : 20, paddingBottom: 16 },
+  title: { fontSize: 32, fontWeight: '800', color: '#111', letterSpacing: -0.5 },
+  subtitle: { fontSize: 14, color: '#888', marginTop: 2, fontWeight: '500' },
+  photoArea: { alignItems: 'center', marginBottom: 20 },
+  photo: { width: 120, height: 120, borderRadius: 60, borderWidth: 3, borderColor: '#0a7ea4' },
+  photoPlaceholder: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#e8e8ed',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#ccc',
+    borderStyle: 'dashed',
   },
+  photoPlaceholderIcon: { fontSize: 32 },
+  photoPlaceholderText: { fontSize: 11, color: '#888', marginTop: 4, fontWeight: '600' },
 });
 
-const prodStyles = StyleSheet.create({
-  card: {
-    flexDirection: 'row',
-    alignItems: 'center',
+const fieldStyles = StyleSheet.create({
+  group: { marginBottom: 16 },
+  label: { fontSize: 14, fontWeight: '600', color: '#555', marginBottom: 6, marginLeft: 2 },
+  input: {
     backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 10,
-    // Shadow (iOS)
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    // Shadow (Android)
-    elevation: 2,
-  },
-  cardPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.98 }],
-  },
-  statusDot: {
-    width: 4,
-    height: 40,
-    borderRadius: 2,
-    marginRight: 14,
-  },
-  content: {
-    flex: 1,
-  },
-  name: {
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 14 : 12,
     fontSize: 16,
-    fontWeight: '700',
-    color: '#222',
-    lineHeight: 20,
+    color: '#111',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
   },
-  barcode: {
-    fontSize: 11,
-    color: '#aaa',
-    marginTop: 2,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  smallBtn: {
+    backgroundColor: '#0a7ea4',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 14 : 12,
   },
-  meta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 6,
-  },
-  date: {
-    fontSize: 12,
-    color: '#777',
-    fontWeight: '500',
-  },
-  formatBadge: {
-    fontSize: 10,
-    color: '#0a7ea4',
-    fontWeight: '700',
-    backgroundColor: '#e8f4f8',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  daysBadge: {
-    alignItems: 'center',
-    minWidth: 56,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    marginLeft: 10,
-  },
-  daysNumber: {
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  daysLabel: {
-    fontSize: 9,
+  smallBtnPressed: { backgroundColor: '#086a8a' },
+  smallBtnText: { fontSize: 18 },
+  dateRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4 },
+  dateField: { flex: 1 },
+  dateInput: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'ios' ? 14 : 12,
+    fontSize: 18,
+    color: '#111',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    textAlign: 'center',
     fontWeight: '600',
-    marginTop: 1,
   },
-});
-
-const emptyStyles = StyleSheet.create({
-  container: {
+  dateSep: { fontSize: 24, color: '#999', paddingBottom: Platform.OS === 'ios' ? 14 : 12, fontWeight: '300' },
+  quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  quickBtn: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  quickBtnPressed: { backgroundColor: '#e8f4f8', borderColor: '#0a7ea4' },
+  quickBtnText: { fontSize: 13, fontWeight: '600', color: '#0a7ea4' },
+  saveBtn: {
+    backgroundColor: '#0a7ea4',
+    borderRadius: 14,
+    paddingVertical: 16,
     alignItems: 'center',
-    paddingHorizontal: 40,
+    shadowColor: '#0a7ea4',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  icon: {
-    fontSize: 72,
-    marginBottom: 20,
-    opacity: 0.6,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 15,
-    color: '#999',
-    textAlign: 'center',
-    lineHeight: 22,
-  },
+  saveBtnPressed: { backgroundColor: '#086a8a', transform: [{ scale: 0.98 }] },
+  saveBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
 });
 
 const fabStyles = StyleSheet.create({
@@ -440,20 +506,12 @@ const fabStyles = StyleSheet.create({
     backgroundColor: '#0a7ea4',
     justifyContent: 'center',
     alignItems: 'center',
-    // Shadow (iOS)
     shadowColor: '#0a7ea4',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 8,
-    // Shadow (Android)
     elevation: 8,
   },
-  buttonPressed: {
-    backgroundColor: '#086a8a',
-    transform: [{ scale: 0.92 }],
-  },
-  icon: {
-    fontSize: 28,
-    color: '#fff',
-  },
+  buttonPressed: { backgroundColor: '#086a8a', transform: [{ scale: 0.92 }] },
+  icon: { fontSize: 28, color: '#fff' },
 });

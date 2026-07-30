@@ -11,6 +11,12 @@ export interface Product {
   format: string;
   /** User-defined product name */
   name: string;
+  /** Batch/lot number */
+  lote?: string;
+  /** Quantity */
+  quantidade?: number;
+  /** Product image URL or local URI */
+  imagem?: string;
   /** Expiration date in ISO string (YYYY-MM-DD) */
   expirationDate: string;
   /** When the product was registered (ISO string) */

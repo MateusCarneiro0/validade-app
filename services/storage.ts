@@ -53,6 +53,9 @@ export async function createProduct(data: {
   barcode: string;
   format: string;
   name: string;
+  lote?: string;
+  quantidade?: number;
+  imagem?: string;
   expirationDate: string;
   notificationIds: string[];
 }): Promise<Product> {
@@ -61,6 +64,9 @@ export async function createProduct(data: {
     barcode: data.barcode,
     format: data.format,
     name: data.name,
+    lote: data.lote,
+    quantidade: data.quantidade,
+    imagem: data.imagem,
     expirationDate: data.expirationDate,
     createdAt: new Date().toISOString(),
     notificationIds: data.notificationIds,
@@ -71,6 +77,23 @@ export async function createProduct(data: {
   await AsyncStorage.setItem(PRODUCTS_KEY, JSON.stringify(products));
 
   return product;
+}
+
+/**
+ * Update an existing product by ID.
+ * Returns the updated product, or null if not found.
+ */
+export async function updateProduct(
+  id: string,
+  updates: Partial<Pick<Product, 'name' | 'lote' | 'quantidade' | 'imagem' | 'expirationDate' | 'barcode' | 'format'>>,
+): Promise<Product | null> {
+  const products = await getProducts();
+  const index = products.findIndex((p) => p.id === id);
+  if (index === -1) return null;
+
+  products[index] = { ...products[index], ...updates };
+  await AsyncStorage.setItem(PRODUCTS_KEY, JSON.stringify(products));
+  return products[index];
 }
 
 /**
