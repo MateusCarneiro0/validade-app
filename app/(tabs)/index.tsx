@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 
-import { ScannerModal, type ScannedCode, type ProductFormData } from '@/components/scanner-modal';
+import { ScannerModal, type ScannedCode } from '@/components/scanner-modal';
 import { requestNotificationPermissions, scheduleExpirationReminders } from '@/services/notifications';
 import { createProduct } from '@/services/storage';
 import { fetchProductByBarcode } from '@/services/openfoodfacts';
@@ -78,9 +78,7 @@ export default function CadastroScreen() {
     setFormat(code.format);
   }, []);
 
-  const handleProductRegister = useCallback((_data: ProductFormData) => {
-    // handled via handleScan + form fields
-  }, []);
+
 
   // ---- Open Food Facts ----
 
@@ -399,7 +397,7 @@ export default function CadastroScreen() {
         visible={scannerVisible}
         onClose={closeScanner}
         onScan={handleScan}
-        onProductRegister={handleProductRegister}
+
       />
     </SafeAreaView>
   );
