@@ -14,6 +14,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import type { Product } from '@/types/product';
 import { daysUntilExpiration, getExpirationStatus } from '@/types/product';
@@ -193,14 +194,14 @@ export default function ProdutosScreen() {
             onPress={() => openEdit(item)}
             hitSlop={8}
           >
-            <Text style={cardStyles.actionIcon}>✏️</Text>
+            <MaterialIcons name="edit" size={18} color="#0a7ea4" />
           </Pressable>
           <Pressable
             style={({ pressed }) => [cardStyles.actionBtn, pressed && { opacity: 0.6 }]}
             onPress={() => handleDelete(item)}
             hitSlop={8}
           >
-            <Text style={cardStyles.actionIcon}>🗑️</Text>
+            <MaterialIcons name="delete-outline" size={18} color="#e74c3c" />
           </Pressable>
         </View>
       </View>
@@ -260,7 +261,7 @@ export default function ProdutosScreen() {
       {/* Search bar */}
       <View style={pageStyles.searchContainer}>
         <View style={pageStyles.searchBar}>
-          <Text style={pageStyles.searchIcon}>🔍</Text>
+          <MaterialIcons name="search" size={18} color="#999" style={{ marginRight: 8 }} />
           <TextInput
             style={pageStyles.searchInput}
             placeholder="Buscar por nome, código ou lote..."
@@ -433,7 +434,7 @@ const pageStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e0e0e0',
   },
-  searchIcon: { fontSize: 16, marginRight: 8, opacity: 0.5 },
+
   searchInput: {
     flex: 1,
     paddingVertical: Platform.OS === 'ios' ? 12 : 10,
@@ -509,7 +510,6 @@ const cardStyles = StyleSheet.create({
   statusText: { fontSize: 10, fontWeight: '700' },
   actions: { justifyContent: 'center', gap: 8, marginLeft: 8 },
   actionBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' },
-  actionIcon: { fontSize: 16 },
 });
 
 const emptyStyles = StyleSheet.create({

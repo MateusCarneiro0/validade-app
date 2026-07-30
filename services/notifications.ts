@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 
 import type { Product } from '@/types/product';
 import { daysUntilExpiration } from '@/types/product';
-import { updateProductNotificationIds } from '@/services/storage';
+import { updateProductNotificationIds, getProductById } from '@/services/storage';
 
 // ---------------------------------------------------------------------------
 // Notification handler setup
@@ -112,10 +112,11 @@ export async function scheduleExpirationReminders(product: Product): Promise<str
     }
   }
 
-  // Persist notification IDs
+  // Persist notification IDs — always re-fetch from storage to avoid accumulating
+  // stale IDs that were already cancelled (e.g. after reschedule).
   if (notificationIds.length > 0) {
-    // Use the notificationIds already in the product if updating
-    const existingIds = product.notificationIds || [];
+    const fresh = await getProductById(product.id);
+    const existingIds = fresh?.notificationIds ?? product.notificationIds ?? [];
     await updateProductNotificationIds(product.id, [
       ...existingIds,
       ...notificationIds,
@@ -150,8 +151,14 @@ export async function cancelProductNotifications(product: Product): Promise<void
 
 /**
  * Cancel old notifications and reschedule new ones.
+ * Re-fetches the product from storage after cancelling so the cleared
+ * notificationIds are used, avoiding accumulation of stale cancelled IDs.
  */
 export async function rescheduleExpirationReminders(product: Product): Promise<string[]> {
   await cancelProductNotifications(product);
-  return await scheduleExpirationReminders(product);
+
+  // Re-fetch from storage so scheduleExpirationReminders sees notificationIds = []
+  const fresh = await getProductById(product.id);
+
+  return await scheduleExpirationReminders(fresh ?? product);
 }

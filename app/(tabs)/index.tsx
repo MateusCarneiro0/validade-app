@@ -14,10 +14,12 @@ import {
   Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as Notifications from 'expo-notifications';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ScannerModal, type ScannedCode } from '@/components/scanner-modal';
 import { requestNotificationPermissions, scheduleExpirationReminders } from '@/services/notifications';
-import { createProduct } from '@/services/storage';
+import { createProduct, getProducts } from '@/services/storage';
 import { fetchProductByBarcode } from '@/services/openfoodfacts';
 
 // ---------------------------------------------------------------------------
@@ -77,8 +79,6 @@ export default function CadastroScreen() {
     setBarcode(code.data);
     setFormat(code.format);
   }, []);
-
-
 
   // ---- Open Food Facts ----
 
@@ -253,9 +253,11 @@ export default function CadastroScreen() {
                 onPress={lookupBarcode}
                 disabled={loadingApi}
               >
-                <Text style={fieldStyles.smallBtnText}>
-                  {loadingApi ? '...' : '🔍'}
-                </Text>
+                {loadingApi ? (
+                  <Text style={fieldStyles.smallBtnText}>...</Text>
+                ) : (
+                  <MaterialIcons name="search" size={22} color="#fff" />
+                )}
               </Pressable>
             </View>
           </View>
@@ -377,9 +379,48 @@ export default function CadastroScreen() {
             onPress={handleSave}
             disabled={saving}
           >
-            <Text style={fieldStyles.saveBtnText}>
-              {saving ? 'Salvando...' : 'Salvar Produto'}
-            </Text>
+            <MaterialIcons name="save" size={20} color="#fff" style={{ marginRight: 8 }} />
+          <Text style={fieldStyles.saveBtnText}>
+            {saving ? 'Salvando...' : 'Salvar Produto'}
+          </Text>
+          </Pressable>
+
+          {/* ── TEST NOTIFICATION BUTTON ── */}
+          <Pressable
+            style={({ pressed }) => [fieldStyles.testBtn, pressed && fieldStyles.testBtnPressed]}
+            onPress={async () => {
+              if (!notificationsGranted) {
+                Alert.alert('Permissão negada', 'As notificações não foram autorizadas. Vá em Configurações > Notificações e ative-as.');
+                return;
+              }
+              const all = await getProducts();
+              if (all.length === 0) {
+                Alert.alert('Nenhum produto', 'Cadastre um produto primeiro para testar a notificação.');
+                return;
+              }
+              const random = all[Math.floor(Math.random() * all.length)];
+              const days = Math.floor(Math.random() * 30) + 1;
+              try {
+                await Notifications.scheduleNotificationAsync({
+                  content: {
+                    title: '📦 TESTE: Produto próximo do vencimento!',
+                    body: `[TESTE] O produto "${random.name}" está ${days} dias de vencer.`,
+                    data: { productId: random.id, daysBefore: days },
+                    sound: true,
+                  },
+                  trigger: {
+                    type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+                    seconds: 2,
+                  },
+                });
+                Alert.alert('Notificação enviada!', `Uma notificação de teste para "${random.name}" será exibida em 2 segundos.`);
+              } catch {
+                Alert.alert('Erro', 'Não foi possível enviar a notificação de teste.');
+              }
+            }}
+          >
+            <MaterialIcons name="notifications-active" size={20} color="#e67e22" />
+            <Text style={fieldStyles.testBtnText}>Testar Notificação</Text>
           </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -389,7 +430,7 @@ export default function CadastroScreen() {
         style={({ pressed }) => [fabStyles.button, pressed && fabStyles.buttonPressed]}
         onPress={openScanner}
       >
-        <Text style={fabStyles.icon}>{Platform.OS === 'ios' ? '􀎷' : '📷'}</Text>
+        <MaterialIcons name="camera-alt" size={28} color="#fff" />
       </Pressable>
 
       {/* Scanner Modal */}
@@ -491,6 +532,25 @@ const fieldStyles = StyleSheet.create({
   },
   saveBtnPressed: { backgroundColor: '#086a8a', transform: [{ scale: 0.98 }] },
   saveBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  testBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingVertical: 14,
+    marginTop: 12,
+    borderWidth: 1.5,
+    borderColor: '#e67e22',
+    shadowColor: '#e67e22',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  testBtnPressed: { backgroundColor: '#fff8f0', transform: [{ scale: 0.98 }] },
+  testBtnText: { fontSize: 15, fontWeight: '700', color: '#e67e22' },
 });
 
 const fabStyles = StyleSheet.create({
@@ -511,5 +571,4 @@ const fabStyles = StyleSheet.create({
     elevation: 8,
   },
   buttonPressed: { backgroundColor: '#086a8a', transform: [{ scale: 0.92 }] },
-  icon: { fontSize: 28, color: '#fff' },
 });
