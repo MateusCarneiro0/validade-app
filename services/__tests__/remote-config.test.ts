@@ -148,6 +148,7 @@ describe('parseGithubRemoteUrl', () => {
 
   it('correctly parses the current project remote URL pattern', () => {
     // This is the exact pattern from the project's remote URL
+    // (Usando token placeholder para não expor o token real no código)
     const projectUrl =
       'https://MateusCarneiro0:ghp_token_placeholder@github.com/MateusCarneiro0/validade-app.git';
     const result = parseGithubRemoteUrl(projectUrl);
