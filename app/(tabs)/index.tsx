@@ -94,9 +94,9 @@ export default function CadastroScreen() {
       const result = await fetchProductByBarcode(code);
       if (result.found && result.name) {
         setProductName(result.name);
-        if (result.imageUrl && !imageUri) {
-          setImageUri(result.imageUrl);
-        }
+        // Usa o updater funcional para não depender de `imageUri` no closure
+        // Só define a imagem da API se o usuário não tiver tirado foto ainda
+        setImageUri((prev) => (result.imageUrl && !prev ? result.imageUrl : prev));
         Alert.alert('Produto encontrado!', `Nome: ${result.name}`);
       } else {
         Alert.alert('Produto não encontrado', 'Digite o nome manualmente.');
@@ -106,7 +106,7 @@ export default function CadastroScreen() {
     } finally {
       setLoadingApi(false);
     }
-  }, [barcode, imageUri]);
+  }, [barcode]);
 
   // ---- Photo ----
 

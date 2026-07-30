@@ -44,7 +44,11 @@ function parseDate(value: string | number | undefined): string | null {
 
   // If it's a number (Excel serial date), convert it
   if (typeof value === 'number') {
-    const date = new Date((value - 25569) * 86400 * 1000);
+    // Excel tem um bug conhecido: trata 1900 como ano bissexto (serial 60 = 29/Fev/1900
+    // que não existiu). Para seriais > 60, subtraímos 1 para corrigir o deslocamento.
+    // Como as datas de validade são sempre futuras (2024+), a correção sempre se aplica.
+    const serialDate = value > 60 ? value - 1 : value;
+    const date = new Date((serialDate - 25569) * 86400 * 1000);
     if (isNaN(date.getTime())) return null;
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
