@@ -64,6 +64,66 @@ export async function requestNotificationPermissions(): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a YYYY-MM-DD string into a local-timezone Date at midnight.
+ * Avoids the UTC interpretation of `new Date('YYYY-MM-DD')` which can
+ * shift the date by the UTC offset (e.g. -1 day in Brazil UTC-3).
+ */
+function parseLocalDate(isoDate: string): Date {
+  const [y, m, d] = isoDate.split('-');
+  return new Date(Number(y), Number(m) - 1, Number(d));
+}
+
+/**
+ * Build a contextual notification title and body for the given milestone.
+ */
+function buildNotificationContent(
+  product: Product,
+  daysBefore: number,
+): { title: string; body: string } {
+  switch (daysBefore) {
+    case 30:
+      return {
+        title: '📦 Vence em 30 dias',
+        body: `O produto "${product.name}" vence em 30 dias. Fique atento à data de validade.`,
+      };
+    case 15:
+      return {
+        title: '📦 Vence em 15 dias',
+        body: `O produto "${product.name}" vence em 15 dias. Programe-se para consumi-lo.`,
+      };
+    case 7:
+      return {
+        title: '📦 Vence em 7 dias',
+        body: `O produto "${product.name}" vence em 7 dias. Não se esqueça de utilizá-lo!`,
+      };
+    case 3:
+      return {
+        title: '📦 Vence em 3 dias',
+        body: `O produto "${product.name}" vence em apenas 3 dias! É hora de usar ou doar.`,
+      };
+    case 1:
+      return {
+        title: '📦 Vence amanhã!',
+        body: `O produto "${product.name}" vence amanhã! Não deixe passar!`,
+      };
+    case 0:
+      return {
+        title: '📦 Produto vence hoje!',
+        body: `O produto "${product.name}" vence hoje! Consuma ou descarte agora.`,
+      };
+    default:
+      return {
+        title: '📦 Produto próximo do vencimento!',
+        body: `O produto "${product.name}" vence em ${daysBefore} dias.`,
+      };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Schedule notifications for a product
 // ---------------------------------------------------------------------------
 
@@ -71,7 +131,7 @@ export async function requestNotificationPermissions(): Promise<boolean> {
  * The milestones at which we want to send reminders (in days before expiration).
  * 0 = the day of expiration itself.
  */
-const REMINDER_DAYS = [30, 15, 7, 0] as const;
+const REMINDER_DAYS = [30, 15, 7, 3, 1, 0] as const;
 
 /**
  * Schedule all applicable reminders for a product.
@@ -84,19 +144,18 @@ export async function scheduleExpirationReminders(product: Product): Promise<str
   for (const daysBefore of REMINDER_DAYS) {
     // Only schedule if the product still has at least this many days until expiration
     if (daysUntilExp >= daysBefore) {
-      const triggerDate = new Date(product.expirationDate + 'T00:00:00');
+      // Use local-timezone date to avoid UTC offset shift (bug #1 fix)
+      const triggerDate = parseLocalDate(product.expirationDate);
       triggerDate.setDate(triggerDate.getDate() - daysBefore);
-      triggerDate.setHours(9, 0, 0, 0); // Notify at 9:00 AM
+      triggerDate.setHours(9, 0, 0, 0); // Notify at 9:00 AM local time
 
       try {
+        const { title, body } = buildNotificationContent(product, daysBefore);
+
         const notificationId = await Notifications.scheduleNotificationAsync({
           content: {
-            title: daysBefore === 0
-              ? '📦 Produto vence hoje!'
-              : '📦 Produto próximo do vencimento!',
-            body: daysBefore === 0
-              ? `O produto "${product.name}" vence hoje! Não se esqueça!`
-              : `O produto "${product.name}" está ${daysBefore} dias de vencer.`,
+            title,
+            body,
             data: {
               productId: product.id,
               daysBefore,

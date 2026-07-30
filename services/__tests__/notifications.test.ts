@@ -63,18 +63,17 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
 // ---------------------------------------------------------------------------
 
 describe('scheduleExpirationReminders', () => {
-  it('schedules 30d, 15d, 7d and 0d notifications when there is enough time', async () => {
-    // Expires in 31+ days → all 4 reminders should be scheduled
+  it('schedules 30d, 15d, 7d, 3d, 1d and 0d notifications when there is enough time', async () => {
+    // Expires in 31+ days → all 6 reminders should be scheduled
     const product = makeProduct({ expirationDate: '2026-09-30' });
 
     const ids = await scheduleExpirationReminders(product);
 
-    expect(ids).toHaveLength(4);
-    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(4);
+    expect(ids).toHaveLength(6);
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(6);
   });
 
-  it('schedules only applicable reminders (7d and 0d for product expiring in 10 days)', async () => {
-    // Set fixed date
+  it('schedules only applicable reminders (7d, 3d, 1d and 0d for product expiring in 10 days)', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-08-01T10:00:00Z'));
 
@@ -85,7 +84,28 @@ describe('scheduleExpirationReminders', () => {
     // 30d: 7 < 30 → skip
     // 15d: 7 < 15 → skip
     // 7d: 7 >= 7 → schedule
+    // 3d: 7 >= 3 → schedule
+    // 1d: 7 >= 1 → schedule
     // 0d: 7 >= 0 → schedule
+    expect(ids).toHaveLength(4);
+
+    jest.useRealTimers();
+  });
+
+  it('schedules only 1d and 0d notification for product expiring tomorrow', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-01T06:00:00Z'));
+
+    const product = makeProduct({ expirationDate: '2026-08-02' }); // tomorrow
+
+    const ids = await scheduleExpirationReminders(product);
+
+    // 30d: 1 < 30 → skip
+    // 15d: 1 < 15 → skip
+    // 7d: 1 < 7 → skip
+    // 3d: 1 < 3 → skip
+    // 1d: 1 >= 1 → schedule
+    // 0d: 1 >= 0 → schedule
     expect(ids).toHaveLength(2);
 
     jest.useRealTimers();
@@ -189,14 +209,16 @@ describe('scheduleExpirationReminders', () => {
       .mockResolvedValueOnce('notif-ok-1')  // 30d → ok
       .mockRejectedValueOnce(new Error('Falha ao agendar'))  // 15d → fail
       .mockResolvedValueOnce('notif-ok-2')  // 7d → ok
-      .mockResolvedValueOnce('notif-ok-3'); // 0d → ok
+      .mockResolvedValueOnce('notif-ok-3')  // 3d → ok
+      .mockResolvedValueOnce('notif-ok-4')  // 1d → ok
+      .mockResolvedValueOnce('notif-ok-5'); // 0d → ok
 
     const product = makeProduct({ expirationDate: '2026-09-30' }); // 60+ days out
     const ids = await scheduleExpirationReminders(product);
 
-    // Should have 3 IDs (30d, 7d, 0d) — 15d failed but was caught
-    expect(ids).toHaveLength(3);
-    expect(ids).toEqual(['notif-ok-1', 'notif-ok-2', 'notif-ok-3']);
+    // Should have 5 IDs (30d, 7d, 3d, 1d, 0d) — 15d failed but was caught
+    expect(ids).toHaveLength(5);
+    expect(ids).toEqual(['notif-ok-1', 'notif-ok-2', 'notif-ok-3', 'notif-ok-4', 'notif-ok-5']);
 
     jest.useRealTimers();
   });
@@ -214,7 +236,7 @@ describe('scheduleExpirationReminders', () => {
     // Todas falharam, array vazio
     expect(ids).toHaveLength(0);
     // Não deve tentar persistir IDs vazios
-    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(4);
+    expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledTimes(6);
 
     jest.useRealTimers();
   });

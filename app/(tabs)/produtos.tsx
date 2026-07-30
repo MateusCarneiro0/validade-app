@@ -171,7 +171,13 @@ export default function ProdutosScreen() {
     const status = getExpirationStatus(days);
 
     return (
-      <View style={cardStyles.card}>
+      <Pressable
+        style={({ pressed }) => [
+          cardStyles.card,
+          pressed && cardStyles.cardPressed,
+        ]}
+        onPress={() => openEdit(item)}
+      >
         {/* Image */}
         {item.imagem ? (
           <Image source={{ uri: item.imagem }} style={cardStyles.image} />
@@ -203,20 +209,26 @@ export default function ProdutosScreen() {
         <View style={cardStyles.actions}>
           <Pressable
             style={({ pressed }) => [cardStyles.actionBtn, pressed && { opacity: 0.6 }]}
-            onPress={() => openEdit(item)}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              openEdit(item);
+            }}
             hitSlop={8}
           >
             <MaterialIcons name="edit" size={18} color="#0a7ea4" />
           </Pressable>
           <Pressable
             style={({ pressed }) => [cardStyles.actionBtn, pressed && { opacity: 0.6 }]}
-            onPress={() => handleDelete(item)}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              handleDelete(item);
+            }}
             hitSlop={8}
           >
             <MaterialIcons name="delete-outline" size={18} color="#e74c3c" />
           </Pressable>
         </View>
-      </View>
+      </Pressable>
     );
   };
 
@@ -227,7 +239,7 @@ export default function ProdutosScreen() {
       <Text style={emptyStyles.icon}>📦</Text>
       <Text style={emptyStyles.title}>Nenhum produto</Text>
       <Text style={emptyStyles.subtitle}>
-        Cadastre produtos na aba{'\n'}"Cadastro" para vê-los aqui
+        Cadastre produtos na aba{'\n'}&quot;Cadastro&quot; para vê-los aqui
       </Text>
     </View>
   );
@@ -522,6 +534,10 @@ const cardStyles = StyleSheet.create({
   statusText: { fontSize: 10, fontWeight: '700' },
   actions: { justifyContent: 'center', gap: 8, marginLeft: 8 },
   actionBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center' },
+  cardPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
+  },
 });
 
 const emptyStyles = StyleSheet.create({

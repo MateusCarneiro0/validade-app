@@ -152,8 +152,8 @@ describe('Fluxo Completo: Cadastro de Produto com Foto', () => {
     const product = await createCompleteProduct({ expirationDate: '2026-09-15' });
     const ids = await scheduleExpirationReminders(product);
 
-    // 30d: 45 >= 30 ✓, 15d: 45 >= 15 ✓, 7d: 45 >= 7 ✓, 0d: 45 >= 0 ✓
-    expect(ids).toHaveLength(4);
+    // 30d: 45 >= 30 ✓, 15d: 45 >= 15 ✓, 7d: 45 >= 7 ✓, 3d: 45 >= 3 ✓, 1d: 45 >= 1 ✓, 0d: 45 >= 0 ✓
+    expect(ids).toHaveLength(6);
 
     // Verify notifications are linked in storage
     const updated = await getProductById(product.id);
@@ -206,7 +206,7 @@ describe('Fluxo Completo: Edição de Produto', () => {
 
     // Schedule initial notifications
     const initialIds = await scheduleExpirationReminders(product);
-    expect(initialIds).toHaveLength(4);
+    expect(initialIds).toHaveLength(6);
 
     // Update expiration date
     const updated = await updateProduct(product.id, { expirationDate: '2027-03-15' });
